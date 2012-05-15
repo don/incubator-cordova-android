@@ -35,7 +35,6 @@ import java.util.Iterator;
 import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLException;
 import javax.net.ssl.SSLSession;
 import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.TrustManager;
@@ -105,23 +104,29 @@ public class FileTransfer extends Plugin {
             } else {
                 return new PluginResult(PluginResult.Status.INVALID_ACTION);
             }
-        } catch (FileNotFoundException e) {
+        } catch (FileTransferException e) {
             Log.e(LOG_TAG, e.getMessage(), e);
-            JSONObject error = createFileTransferError(FILE_NOT_FOUND_ERR, source, target);
-            return new PluginResult(PluginResult.Status.IO_EXCEPTION, error);
-        } catch (IllegalArgumentException e) {
-            Log.e(LOG_TAG, e.getMessage(), e);
-            JSONObject error = createFileTransferError(INVALID_URL_ERR, source, target);
-            return new PluginResult(PluginResult.Status.IO_EXCEPTION, error);
-        } catch (SSLException e) {
-            Log.e(LOG_TAG, e.getMessage(), e);
-            Log.d(LOG_TAG, "Got my ssl exception!!!");
-            JSONObject error = createFileTransferError(CONNECTION_ERR, source, target);
-            return new PluginResult(PluginResult.Status.IO_EXCEPTION, error);
-        } catch (IOException e) {
-            Log.e(LOG_TAG, e.getMessage(), e);
-            JSONObject error = createFileTransferError(CONNECTION_ERR, source, target);
-            return new PluginResult(PluginResult.Status.IO_EXCEPTION, error);
+            //JSONObject error = createFileTransferError(FILE_NOT_FOUND_ERR, source, target);
+            return new PluginResult(PluginResult.Status.IO_EXCEPTION, e.toJSONObject());
+            /*
+            } catch (FileNotFoundException e) {
+                Log.e(LOG_TAG, e.getMessage(), e);
+                JSONObject error = createFileTransferError(FILE_NOT_FOUND_ERR, source, target);
+                return new PluginResult(PluginResult.Status.IO_EXCEPTION, error);
+            } catch (IllegalArgumentException e) {
+                Log.e(LOG_TAG, e.getMessage(), e);
+                JSONObject error = createFileTransferError(INVALID_URL_ERR, source, target);
+                return new PluginResult(PluginResult.Status.IO_EXCEPTION, error);
+            } catch (SSLException e) {
+                Log.e(LOG_TAG, e.getMessage(), e);
+                Log.d(LOG_TAG, "Got my ssl exception!!!");
+                JSONObject error = createFileTransferError(CONNECTION_ERR, source, target);
+                return new PluginResult(PluginResult.Status.IO_EXCEPTION, error);
+            } catch (IOException e) {
+                Log.e(LOG_TAG, e.getMessage(), e);
+                JSONObject error = createFileTransferError(CONNECTION_ERR, source, target);
+                return new PluginResult(PluginResult.Status.IO_EXCEPTION, error);
+            */
         } catch (JSONException e) {
             Log.e(LOG_TAG, e.getMessage(), e);
             return new PluginResult(PluginResult.Status.JSON_EXCEPTION);
@@ -173,24 +178,6 @@ public class FileTransfer extends Plugin {
     }
 
     /**
-     * Create an error object based on the passed in errorCode
-     * @param errorCode 	the error
-     * @return JSONObject containing the error
-     */
-    private JSONObject createFileTransferError(int errorCode, String source, String target) {
-        JSONObject error = null;
-        try {
-            error = new JSONObject();
-            error.put("code", errorCode);
-            error.put("source", source);
-            error.put("target", target);
-        } catch (JSONException e) {
-            Log.e(LOG_TAG, e.getMessage(), e);
-        }
-        return error;
-    }
-
-    /**
      * Convenience method to read a parameter from the list of JSON args.
      * @param args			the args passed to the Plugin
      * @param position		the position to retrieve the arg from
@@ -220,12 +207,10 @@ public class FileTransfer extends Plugin {
      * @return FileUploadResult containing result of upload request
      */
     public FileUploadResult upload(String file, String server, final String fileKey, final String fileName,
-            final String mimeType, JSONObject params, boolean trustEveryone, boolean chunkedMode) throws IOException, SSLException {
+            final String mimeType, JSONObject params, boolean trustEveryone, boolean chunkedMode) throws FileTransferException {
+
         // Create return object
         FileUploadResult result = new FileUploadResult();
-
-        // Get a input stream of the file on the phone
-        FileInputStream fileInputStream = (FileInputStream) getPathFromUri(file);
 
         HttpURLConnection conn = null;
         DataOutputStream dos = null;
@@ -235,7 +220,12 @@ public class FileTransfer extends Plugin {
         byte[] buffer;
         int maxBufferSize = 8096;
 
-        //------------------ CLIENT REQUEST
+        try {
+
+        // Get a input stream of the file on the phone
+        FileInputStream fileInputStream = (FileInputStream) getPathFromUri(file);
+
+         //------------------ CLIENT REQUEST
         // open a URL connection to the server
         URL url = new URL(server);
 
@@ -398,6 +388,9 @@ public class FileTransfer extends Plugin {
             HttpsURLConnection.setDefaultSSLSocketFactory(defaultSSLSocketFactory);
         }
 
+        } catch (IOException e) {
+            throw new FileTransferException(file, server, conn, e);
+        }
         return result;
     }
 
@@ -408,7 +401,9 @@ public class FileTransfer extends Plugin {
      * @param target      	Full path of the file on the file system
      * @return JSONObject 	the downloaded file
      */
-    public JSONObject download(String source, String target) throws IOException {
+    public JSONObject download(String source, String target) throws FileTransferException {
+
+        HttpURLConnection connection = null;
         try {
             File file = getFileFromPath(target);
 
@@ -419,7 +414,7 @@ public class FileTransfer extends Plugin {
             if(this.ctx.isUrlWhiteListed(source))
             {
               URL url = new URL(source);
-              HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+              connection = (HttpURLConnection) url.openConnection();
               connection.setRequestMethod("GET");
               
               //Add cookie support
@@ -455,11 +450,19 @@ public class FileTransfer extends Plugin {
             }
             else
             {
-              throw new IOException("Error: Unable to connect to domain");
+              // TODO need FileTransferError.URL_NOT_IN_WHITE_LIST;
+              throw new FileTransferException(source, target, CONNECTION_ERR, 401);
             }
-        } catch (Exception e) {
-            Log.d(LOG_TAG, e.getMessage(), e);
-            throw new IOException("Error while downloading");
+        } catch (IOException e) {
+            throw new FileTransferException(source, target, connection, e);
+        } catch (JSONException e) {
+            throw new FileTransferException(source, target, connection, e);
+        } catch (IllegalArgumentException e) {
+            throw new FileTransferException(source, target, connection, e);
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
         }
     }
 
@@ -501,4 +504,109 @@ public class FileTransfer extends Plugin {
             return new File(path);
         }
     }
+
+    class FileTransferException extends Exception {
+
+        static final int UNKNOWN = -1;
+
+        Integer code = null;
+        String source = null;
+        String target = null;
+        Integer httpStatus = null;
+
+        FileTransferException(String source, String target, int code, int httpStatus) {
+            super();
+            this.source = source;
+            this.target = target;
+            this.code = code;
+            this.httpStatus = httpStatus;
+        }
+
+        FileTransferException(String source, String target, HttpURLConnection connection, Exception cause) {
+            super(cause);
+            this.source = source;
+            this.target = target;
+            setHttpStatus(connection);
+        }
+
+        int getCode() {
+            if (code == null || code < 0) {
+                code = translate(getCause());
+            }
+            return code;
+        }
+
+        void setCode(Integer code) {
+            this.code = code;
+        }
+
+        String getSource() {
+            return source;
+        }
+
+        void setSource(String source) {
+            this.source = source;
+        }
+
+        String getTarget() {
+            return target;
+        }
+
+        void setTarget(String target) {
+            this.target = target;
+        }
+
+        Integer getHttpStatus() {
+            return httpStatus;
+        }
+
+        void setHttpStatus(Integer httpStatus) {
+            this.httpStatus = httpStatus;
+        }
+
+        void setHttpStatus(HttpURLConnection connection) {
+            if (connection != null) {
+                try {
+                    setHttpStatus(connection.getResponseCode());
+                } catch (IOException e) {
+                    Log.e(LOG_TAG, "Failed to get response code from connection", e);
+                }
+            }
+        }
+
+        private int translate(Throwable t) {
+            int reason = UNKNOWN;
+
+            // This is from the original catch logic on exec
+            // TODO really need some tests to verify this
+            if (t instanceof IllegalArgumentException) {
+                reason = FileTransfer.INVALID_URL_ERR;
+
+            } else if (t instanceof FileNotFoundException) {
+                reason = FileTransfer.FILE_NOT_FOUND_ERR;
+
+            } else if (t instanceof IOException) {
+                // Not true since local file could be IOException too
+                reason = FileTransfer.CONNECTION_ERR;
+            }
+            return reason;
+        }
+
+        private JSONObject toJSONObject() {
+            JSONObject error = null;
+            try {
+                error = new JSONObject();
+                error.put("code", getCode());
+                error.put("source", source);
+                error.put("target", target);
+                if (httpStatus != null) {
+                    error.put("http_status", httpStatus);
+                }
+            } catch (JSONException e) {
+                Log.e(LOG_TAG, e.getMessage(), e);
+            }
+            return error;
+        }
+    }
+
 }
